@@ -1,57 +1,51 @@
-import { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from "react";
-import { createSecureStorage } from "./security";
+import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from "react";
+import { supabase } from "./supabase";
 
+// ============================================================
+// Types
+// ============================================================
 export interface NewsItem {
   id: string;
-  title: string;
-  excerpt: string;
-  date: string;
+  judul: string;
+  isi: string;
   tag: string;
-  imageUrl?: string;
+  foto?: string;
   link?: string;
-}
-
-
-export interface FeedbackItem {
-  id: string;
-  name?: string;
-  feedback: string;
-  createdAt: string;
+  created_at: string;
 }
 
 export interface GalleryItem {
   id: string;
-  title: string;
-  description?: string;
-  aspect: string;
-  imageUrl?: string;
+  judul: string;
+  deskripsi?: string;
+  foto?: string;
   link?: string;
+  aspect: string;
+  created_at: string;
 }
 
-const defaultNews: NewsItem[] = [
-  { id: "1", title: "ASA 9 Raih Juara di Lomba Jurnalistik Nasional", excerpt: "Tim jurnalistik ASA 9 berhasil meraih prestasi gemilang dalam kompetisi tingkat nasional...", date: "12 Feb 2026", tag: "Prestasi" },
-  { id: "2", title: "Workshop Fotografi Bersama Fotografer Profesional", excerpt: "Kegiatan workshop fotografi bersama mentor berpengalaman telah sukses dilaksanakan...", date: "8 Feb 2026", tag: "Kegiatan" },
-  { id: "3", title: "Majalah Sekolah Edisi Terbaru Telah Terbit", excerpt: "Edisi terbaru majalah sekolah karya ASA 9 kini sudah dapat dibaca oleh seluruh siswa...", date: "1 Feb 2026", tag: "Publikasi" },
-];
+export interface FeedbackItem {
+  id: string;
+  nama?: string;
+  pesan: string;
+  is_read: boolean;
+  created_at: string;
+}
 
-const defaultGallery: GalleryItem[] = [
-  { id: "1", title: "Workshop Fotografi", description: "Pelatihan teknik fotografi dasar dan lanjutan", aspect: "aspect-square" },
-  { id: "2", title: "Peliputan Acara", description: "Dokumentasi kegiatan sekolah", aspect: "aspect-[4/5]" },
-  { id: "3", title: "Tim Redaksi", description: "Rapat redaksi majalah sekolah", aspect: "aspect-square" },
-  { id: "4", title: "Studio Broadcasting", description: "Kegiatan siaran radio sekolah", aspect: "aspect-[4/5]" },
-  { id: "5", title: "Kompetisi Nasional", description: "Partisipasi di ajang nasional", aspect: "aspect-square" },
-  { id: "6", title: "Behind The Scene", description: "Proses di balik layar produksi", aspect: "aspect-[4/5]" },
-];
-
-const secureStorage = createSecureStorage();
-
+// ============================================================
+// Context
+// ============================================================
 interface DataStore {
   news: NewsItem[];
-  setNews: (news: NewsItem[]) => void;
-  feedbacks: FeedbackItem[];
-  addFeedback: (fb: Omit<FeedbackItem, "id" | "createdAt">) => void;
   gallery: GalleryItem[];
-  setGallery: (gallery: GalleryItem[]) => void;
+  feedbacks: FeedbackItem[];
+  loadingNews: boolean;
+  loadingGallery: boolean;
+  loadingFeedbacks: boolean;
+  refreshNews: () => Promise<void>;
+  refreshGallery: () => Promise<void>;
+  refreshFeedbacks: () => Promise<void>;
+  addFeedback: (nama: string, pesan: string) => Promise<{ error: string | null }>;
 }
 
 const DataContext = createContext<DataStore | null>(null);
@@ -62,56 +56,68 @@ export const useDataStore = () => {
   return ctx;
 };
 
+// ============================================================
+// Provider
+// ============================================================
 export const DataProvider = ({ children }: { children: ReactNode }) => {
-  const [news, setNewsState] = useState<NewsItem[]>(defaultNews);
-  
+  const [news, setNews] = useState<NewsItem[]>([]);
+  const [gallery, setGallery] = useState<GalleryItem[]>([]);
   const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
-  const [gallery, setGalleryState] = useState<GalleryItem[]>(defaultGallery);
-  const initialized = useRef(false);
+  const [loadingNews, setLoadingNews] = useState(true);
+  const [loadingGallery, setLoadingGallery] = useState(true);
+  const [loadingFeedbacks, setLoadingFeedbacks] = useState(false);
 
-  // Load from secure storage on mount
-  useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
-
-    const loadAll = async () => {
-      const [loadedNews, loadedFeedbacks, loadedGallery] = await Promise.all([
-        secureStorage.load<NewsItem[]>("news", defaultNews),
-        secureStorage.load<FeedbackItem[]>("feedbacks", []),
-        secureStorage.load<GalleryItem[]>("gallery", defaultGallery),
-      ]);
-      setNewsState(loadedNews);
-      
-      setFeedbacks(loadedFeedbacks);
-      setGalleryState(loadedGallery);
-    };
-
-    loadAll();
+  const refreshNews = useCallback(async () => {
+    setLoadingNews(true);
+    const { data } = await supabase
+      .from("berita")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (data) setNews(data);
+    setLoadingNews(false);
   }, []);
 
-  const setNews = useCallback((n: NewsItem[]) => {
-    setNewsState(n);
-    secureStorage.save("news", n);
+  const refreshGallery = useCallback(async () => {
+    setLoadingGallery(true);
+    const { data } = await supabase
+      .from("galeri")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (data) setGallery(data);
+    setLoadingGallery(false);
   }, []);
 
-  const setGallery = useCallback((g: GalleryItem[]) => {
-    setGalleryState(g);
-    secureStorage.save("gallery", g);
+  const refreshFeedbacks = useCallback(async () => {
+    setLoadingFeedbacks(true);
+    const { data } = await supabase
+      .from("kritik_saran")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (data) setFeedbacks(data);
+    setLoadingFeedbacks(false);
   }, []);
 
-
-  const addFeedback = useCallback((fb: Omit<FeedbackItem, "id" | "createdAt">) => {
-    setFeedbacks(prev => {
-      const next = [{ ...fb, id: crypto.randomUUID(), createdAt: new Date().toISOString() }, ...prev];
-      secureStorage.save("feedbacks", next);
-      return next;
+  const addFeedback = useCallback(async (nama: string, pesan: string) => {
+    const { error } = await supabase.from("kritik_saran").insert({
+      nama: nama.trim() || "Anonim",
+      pesan: pesan.trim(),
     });
+    return { error: error?.message || null };
+  }, []);
+
+  useEffect(() => {
+    refreshNews();
+    refreshGallery();
   }, []);
 
   return (
-    <DataContext.Provider value={{ news, setNews, feedbacks, addFeedback, gallery, setGallery }}>
+    <DataContext.Provider value={{
+      news, gallery, feedbacks,
+      loadingNews, loadingGallery, loadingFeedbacks,
+      refreshNews, refreshGallery, refreshFeedbacks,
+      addFeedback,
+    }}>
       {children}
     </DataContext.Provider>
   );
 };
-

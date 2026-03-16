@@ -4,7 +4,7 @@ import { Camera, Newspaper, Users, Award, Lightbulb } from "lucide-react";
 const features = [
   { icon: Camera, title: "Fotografi", desc: "Mengabadikan momen dengan sudut pandang kreatif" },
   { icon: Users, title: "Broadcasting", desc: "Siaran dan konten multimedia profesional" },
-  { icon: Lightbulb, title: "Editor", desc: "Menyunting dan menyempurnakan konten secara kreatif" },
+  { icon: Lightbulb, title: "Kreatif", desc: "Menyunting dan menyempurnakan konten secara kreatif" },
   { icon: Award, title: "Kompetisi", desc: "Berprestasi di berbagai lomba jurnalistik" },
 ];
 

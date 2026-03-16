@@ -1,27 +1,19 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Lock, Newspaper, MessageSquare, Image, Plus, Trash2, Edit2, Save, X, ArrowLeft, Link as LinkIcon, ImageIcon, Upload, ShieldAlert, Timer, KeyRound } from "lucide-react";
-import { useDataStore, NewsItem, GalleryItem } from "@/lib/dataStore";
+import {
+  Lock, Newspaper, MessageSquare, Image, Plus, Trash2, Edit2,
+  Save, X, ArrowLeft, Link as LinkIcon, ImageIcon, Upload,
+  ShieldAlert, Timer, Eye, EyeOff, CheckCircle, MessageCircle,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import { z } from "zod";
-import {
-  sanitizeInput,
-  isValidSafeUrl,
-  checkRateLimit,
-  resetRateLimit,
-  verifyPassword,
-  createSession,
-  validateSession,
-  destroySession,
-  validateFileUpload,
-  hardenRuntime,
-  isPasswordSet,
-  setAdminPassword,
-  resetAdminPassword,
-} from "@/lib/security";
+import { supabase } from "@/lib/supabase";
+import { sanitizeInput, isValidSafeUrl, checkRateLimit, resetRateLimit, validateFileUpload, hardenRuntime } from "@/lib/security";
+import { useDataStore, FeedbackItem } from "@/lib/dataStore";
 
-const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
+const inputClass = "w-full bg-secondary/50 border border-border/50 rounded-lg px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring/50";
+const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || "";
 
 const handleFileSelect = (file: File, onResult: (dataUrl: string) => void) => {
   const error = validateFileUpload(file, 2);
@@ -32,94 +24,156 @@ const handleFileSelect = (file: File, onResult: (dataUrl: string) => void) => {
   reader.readAsDataURL(file);
 };
 
+// ============================================================
+// NEWS FORM — standalone component, outside NewsManager
+// ============================================================
+interface NewsFormProps {
+  form: { judul: string; isi: string; tag: string; foto: string; link: string };
+  setForm: React.Dispatch<React.SetStateAction<{ judul: string; isi: string; tag: string; foto: string; link: string }>>;
+  onSave?: () => void;
+  onCancel?: () => void;
+  onAdd?: () => void;
+  loading: boolean;
+}
+
+function NewsForm({ form, setForm, onSave, onCancel, onAdd, loading }: NewsFormProps) {
+  return (
+    <div className="space-y-3">
+      <input
+        value={form.judul}
+        onChange={e => setForm(f => ({ ...f, judul: e.target.value }))}
+        maxLength={200}
+        placeholder="Judul berita *"
+        className={inputClass}
+      />
+      <textarea
+        value={form.isi}
+        onChange={e => setForm(f => ({ ...f, isi: e.target.value }))}
+        maxLength={2000}
+        placeholder="Isi berita *"
+        rows={4}
+        className={`${inputClass} resize-none`}
+      />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="relative">
+          <ImageIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
+          <input
+            value={form.foto.startsWith("data:") ? "📷 File terpilih" : form.foto}
+            onChange={e => setForm(f => ({ ...f, foto: e.target.value }))}
+            maxLength={500}
+            placeholder="URL Gambar (opsional)"
+            className={`${inputClass} pl-9 pr-20`}
+            readOnly={form.foto.startsWith("data:")}
+          />
+          <label className="absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground px-2.5 py-1.5 rounded-md text-xs flex items-center gap-1 transition-colors">
+            <Upload size={12} /> File
+            <input type="file" accept="image/*" className="hidden" onChange={e => {
+              const f = e.target.files?.[0];
+              if (f) handleFileSelect(f, url => setForm(prev => ({ ...prev, foto: url })));
+              e.target.value = "";
+            }} />
+          </label>
+        </div>
+        <div className="relative">
+          <LinkIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
+          <input
+            value={form.link}
+            onChange={e => setForm(f => ({ ...f, link: e.target.value }))}
+            maxLength={500}
+            placeholder="Link artikel (opsional)"
+            className={`${inputClass} pl-9`}
+          />
+        </div>
+      </div>
+      {form.foto && (
+        <div className="rounded-lg overflow-hidden border border-border/30 max-h-40">
+          <img src={form.foto} alt="Preview" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+        </div>
+      )}
+      <div className="flex gap-3">
+        <input
+          value={form.tag}
+          onChange={e => setForm(f => ({ ...f, tag: e.target.value }))}
+          maxLength={30}
+          placeholder="Tag (misal: Prestasi) *"
+          className={`flex-1 ${inputClass}`}
+        />
+        {onSave ? (
+          <div className="flex gap-2">
+            <button onClick={onSave} disabled={loading} className="text-foreground hover:text-foreground/80 disabled:opacity-50"><Save size={18} /></button>
+            <button onClick={onCancel} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
+          </div>
+        ) : (
+          <button onClick={onAdd} disabled={loading} className="bg-foreground text-background px-6 py-2.5 rounded-lg text-sm font-semibold hover:bg-foreground/90 transition-colors disabled:opacity-50">
+            Tambah
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Admin Panel
+// ============================================================
 const AdminPanel = () => {
-  const [authenticated, setAuthenticated] = useState(() => validateSession());
+  const [authenticated, setAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
-  const [confirmPw, setConfirmPw] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const [lockoutTime, setLockoutTime] = useState(0);
   const [tab, setTab] = useState<"news" | "feedback" | "gallery">("news");
-  const [mode, setMode] = useState<"login" | "setup" | "reset">(isPasswordSet() ? "login" : "setup");
+  const { refreshNews, refreshGallery, refreshFeedbacks } = useDataStore();
 
-  // Runtime hardening on mount
   useEffect(() => { hardenRuntime(); }, []);
 
-  // Session validation interval
   useEffect(() => {
-    if (!authenticated) return;
-    const interval = setInterval(() => {
-      if (!validateSession()) {
-        setAuthenticated(false);
-        toast.error("Sesi telah berakhir. Silakan login kembali.");
-      }
-    }, 60_000);
-    return () => clearInterval(interval);
-  }, [authenticated]);
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) setAuthenticated(true);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
+      setAuthenticated(!!session);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
 
-  // Lockout countdown
   useEffect(() => {
     if (lockoutTime <= 0) return;
     const interval = setInterval(() => {
-      setLockoutTime((prev) => {
-        if (prev <= 1000) return 0;
-        return prev - 1000;
-      });
+      setLockoutTime((prev) => (prev <= 1000 ? 0 : prev - 1000));
     }, 1000);
     return () => clearInterval(interval);
   }, [lockoutTime]);
 
-  const handleSetup = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (password.length < 6) { toast.error("Password minimal 6 karakter!"); return; }
-    if (password !== confirmPw) { toast.error("Konfirmasi password tidak cocok!"); return; }
-    await setAdminPassword(password);
-    createSession();
-    setAuthenticated(true);
-    setPassword("");
-    setConfirmPw("");
-    toast.success("Password berhasil dibuat! Anda sudah login.");
-  }, [password, confirmPw]);
-
   const handleLogin = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
-    
     const limit = checkRateLimit("admin_login", 5, 60_000, 300_000);
     if (!limit.allowed) {
       setLockoutTime(limit.lockedUntilMs);
-      toast.error("Terlalu banyak percobaan! Coba lagi nanti.");
+      toast.error("Terlalu banyak percobaan!");
       setPassword("");
       return;
     }
-
-    const valid = await verifyPassword(password);
-    if (valid) {
-      resetRateLimit("admin_login");
-      createSession();
-      setAuthenticated(true);
-      toast.success("Login berhasil!");
-    } else {
+    const { error } = await supabase.auth.signInWithPassword({ email: ADMIN_EMAIL, password });
+    if (error) {
       toast.error(`Password salah! (${limit.remainingAttempts} percobaan tersisa)`);
       setPassword("");
+    } else {
+      resetRateLimit("admin_login");
+      toast.success("Login berhasil!");
     }
   }, [password]);
 
-  const handleReset = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (password.length < 6) { toast.error("Password baru minimal 6 karakter!"); return; }
-    if (password !== confirmPw) { toast.error("Konfirmasi password tidak cocok!"); return; }
-    await setAdminPassword(password);
-    createSession();
-    setAuthenticated(true);
-    setPassword("");
-    setConfirmPw("");
-    toast.success("Password berhasil direset! Anda sudah login.");
-  }, [password, confirmPw]);
-
-  const handleLogout = useCallback(() => {
-    destroySession();
-    setAuthenticated(false);
-    setMode(isPasswordSet() ? "login" : "setup");
+  const handleLogout = useCallback(async () => {
+    await supabase.auth.signOut();
     toast.success("Logout berhasil.");
   }, []);
+
+  const handleTabChange = (key: "news" | "feedback" | "gallery") => {
+    setTab(key);
+    if (key === "news") refreshNews();
+    if (key === "gallery") refreshGallery();
+    if (key === "feedback") refreshFeedbacks();
+  };
 
   if (lockoutTime > 0) {
     const minutes = Math.floor(lockoutTime / 60_000);
@@ -128,13 +182,11 @@ const AdminPanel = () => {
       <div className="min-h-screen bg-background flex items-center justify-center p-6">
         <div className="glass-card rounded-lg p-12 text-center max-w-md">
           <ShieldAlert className="text-destructive mx-auto mb-4" size={48} />
-          <h2 className="text-xl font-display font-bold text-foreground mb-2">Akses Diblokir Sementara</h2>
-          <p className="text-sm text-muted-foreground mb-4">Terlalu banyak percobaan login gagal.</p>
-          <div className="flex items-center justify-center gap-2 text-muted-foreground">
+          <h2 className="text-xl font-display font-bold text-foreground mb-2">Akses Diblokir</h2>
+          <div className="flex items-center justify-center gap-2 text-muted-foreground mt-4">
             <Timer size={16} />
             <span className="font-mono text-lg">{minutes}:{seconds.toString().padStart(2, "0")}</span>
           </div>
-          <p className="text-xs text-muted-foreground/50 mt-4">Coba lagi setelah waktu habis</p>
           <Link to="/" className="flex items-center gap-2 justify-center mt-6 text-xs text-muted-foreground hover:text-foreground transition-colors">
             <ArrowLeft size={12} /> Kembali ke beranda
           </Link>
@@ -148,44 +200,25 @@ const AdminPanel = () => {
       <div className="min-h-screen bg-background flex items-center justify-center p-6">
         <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="glass-card rounded-lg p-12 max-w-sm w-full">
           <Lock className="text-muted-foreground mx-auto mb-6" size={40} />
-          <h2 className="text-2xl font-display font-bold text-foreground text-center mb-2">
-            {mode === "setup" ? "Buat Password" : mode === "reset" ? "Reset Password" : "Admin Panel"}
-          </h2>
-          <p className="text-xs text-muted-foreground text-center mb-8 font-mono">
-            {mode === "setup" ? "Buat password admin baru" : mode === "reset" ? "Masukkan password baru" : "ASA 9 — Akses Terbatas"}
-          </p>
-
-          {mode === "login" && (
-            <form onSubmit={handleLogin}>
-              <input type="password" placeholder="Masukkan password" value={password} onChange={(e) => setPassword(e.target.value)}
-                maxLength={50} autoComplete="current-password"
-                className="w-full bg-secondary/50 border border-border/50 rounded-lg px-5 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring/50 mb-4" />
-              <button type="submit" className="w-full bg-foreground text-background font-display font-semibold py-3 rounded-lg hover:bg-foreground/90 transition-colors">Masuk</button>
-              <button type="button" onClick={() => { setMode("reset"); setPassword(""); }} className="w-full text-xs text-muted-foreground hover:text-foreground mt-3 transition-colors">
-                Lupa / Reset Password
+          <h2 className="text-2xl font-display font-bold text-foreground text-center mb-2">Admin Panel</h2>
+          <p className="text-xs text-muted-foreground text-center mb-8 font-mono">ASA 9 — Akses Terbatas</p>
+          <form onSubmit={handleLogin}>
+            <div className="relative mb-4">
+              <input
+                type={showPw ? "text" : "password"}
+                placeholder="Masukkan password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                maxLength={100}
+                autoComplete="current-password"
+                className={`${inputClass} pr-12`}
+              />
+              <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-muted-foreground">
+                {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
-            </form>
-          )}
-
-          {(mode === "setup" || mode === "reset") && (
-            <form onSubmit={mode === "setup" ? handleSetup : handleReset}>
-              <input type="password" placeholder="Password baru (min. 6 karakter)" value={password} onChange={(e) => setPassword(e.target.value)}
-                maxLength={50} autoComplete="new-password"
-                className="w-full bg-secondary/50 border border-border/50 rounded-lg px-5 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring/50 mb-3" />
-              <input type="password" placeholder="Konfirmasi password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
-                maxLength={50} autoComplete="new-password"
-                className="w-full bg-secondary/50 border border-border/50 rounded-lg px-5 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring/50 mb-4" />
-              <button type="submit" className="w-full bg-foreground text-background font-display font-semibold py-3 rounded-lg hover:bg-foreground/90 transition-colors">
-                {mode === "setup" ? "Buat Password" : "Reset Password"}
-              </button>
-              {mode === "reset" && (
-                <button type="button" onClick={() => { setMode("login"); setPassword(""); setConfirmPw(""); }} className="w-full text-xs text-muted-foreground hover:text-foreground mt-3 transition-colors">
-                  Kembali ke Login
-                </button>
-              )}
-            </form>
-          )}
-
+            </div>
+            <button type="submit" className="w-full bg-foreground text-background font-display font-semibold py-3 rounded-lg hover:bg-foreground/90 transition-colors">Masuk</button>
+          </form>
           <Link to="/" className="flex items-center gap-2 justify-center mt-6 text-xs text-muted-foreground hover:text-foreground transition-colors">
             <ArrowLeft size={12} /> Kembali ke beranda
           </Link>
@@ -210,16 +243,13 @@ const AdminPanel = () => {
           </div>
           <div className="flex items-center gap-3">
             <Link to="/" className="text-xs text-muted-foreground hover:text-foreground transition-colors font-mono">← Beranda</Link>
-            <button onClick={() => { destroySession(); setAuthenticated(false); setMode("reset"); }}
-              className="text-xs bg-secondary text-muted-foreground px-4 py-2 rounded-lg hover:text-foreground transition-colors font-mono flex items-center gap-1"><KeyRound size={12} /> Ganti Password</button>
-            <button onClick={handleLogout}
-              className="text-xs bg-secondary text-muted-foreground px-4 py-2 rounded-lg hover:text-foreground transition-colors font-mono">Logout</button>
+            <button onClick={handleLogout} className="text-xs bg-secondary text-muted-foreground px-4 py-2 rounded-lg hover:text-foreground transition-colors font-mono">Logout</button>
           </div>
         </div>
 
         <div className="flex gap-2 mb-8 overflow-x-auto pb-2">
-          {tabs.map(t => (
-            <button key={t.key} onClick={() => setTab(t.key)}
+          {tabs.map((t) => (
+            <button key={t.key} onClick={() => handleTabChange(t.key)}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-display font-medium transition-all whitespace-nowrap ${tab === t.key ? "bg-foreground text-background" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
               <t.icon size={16} />{t.label}
             </button>
@@ -238,126 +268,105 @@ const AdminPanel = () => {
   );
 };
 
-const inputClass = "w-full bg-secondary/50 border border-border/50 rounded-lg px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring/50";
-
+// ============================================================
+// News Manager
+// ============================================================
 const newsSchema = z.object({
-  title: z.string().trim().min(1).max(200),
-  excerpt: z.string().trim().min(1).max(500),
-  tag: z.string().trim().min(1).max(30),
-  imageUrl: z.string().max(500).optional(),
-  link: z.string().max(500).optional(),
+  judul: z.string().trim().min(1, "Judul wajib diisi").max(200),
+  isi: z.string().trim().min(1, "Isi wajib diisi").max(2000),
+  tag: z.string().trim().min(1, "Tag wajib diisi").max(30),
 });
 
 function NewsManager() {
-  const { news, setNews } = useDataStore();
+  const { news, refreshNews } = useDataStore();
   const [editing, setEditing] = useState<string | null>(null);
-  const [form, setForm] = useState({ title: "", excerpt: "", tag: "", imageUrl: "", link: "" });
+  const [addForm, setAddForm] = useState({ judul: "", isi: "", tag: "", foto: "", link: "" });
+  const [editForm, setEditForm] = useState({ judul: "", isi: "", tag: "", foto: "", link: "" });
+  const [loading, setLoading] = useState(false);
 
-  const validateForm = () => {
+  const validateForm = (form: typeof addForm) => {
     const result = newsSchema.safeParse(form);
-    if (!result.success) { toast.error("Isi semua field wajib dengan benar!"); return false; }
-    if (form.imageUrl && !isValidSafeUrl(form.imageUrl)) { toast.error("URL gambar tidak valid atau tidak aman!"); return false; }
-    if (form.link && !isValidSafeUrl(form.link)) { toast.error("URL link tidak valid atau tidak aman!"); return false; }
+    if (!result.success) { toast.error(result.error.errors[0].message); return false; }
+    if (form.foto && !isValidSafeUrl(form.foto)) { toast.error("URL gambar tidak valid!"); return false; }
+    if (form.link && !isValidSafeUrl(form.link)) { toast.error("URL link tidak valid!"); return false; }
     return true;
   };
 
-  const addNews = () => {
-    if (!validateForm()) return;
-    const item: NewsItem = {
-      id: crypto.randomUUID(), title: sanitizeInput(form.title), excerpt: sanitizeInput(form.excerpt),
-      date: new Date().toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }),
-      tag: sanitizeInput(form.tag), imageUrl: form.imageUrl.trim() || undefined, link: form.link.trim() || undefined,
-    };
-    setNews([item, ...news]);
-    setForm({ title: "", excerpt: "", tag: "", imageUrl: "", link: "" });
-    toast.success("Berita ditambahkan!");
+  const addNews = async () => {
+    if (!validateForm(addForm)) return;
+    setLoading(true);
+    const { error } = await supabase.from("berita").insert({
+      judul: sanitizeInput(addForm.judul),
+      isi: sanitizeInput(addForm.isi),
+      tag: sanitizeInput(addForm.tag),
+      foto: addForm.foto.trim() || null,
+      link: addForm.link.trim() || null,
+    });
+    if (error) toast.error("Gagal menyimpan!");
+    else {
+      toast.success("Berita ditambahkan!");
+      setAddForm({ judul: "", isi: "", tag: "", foto: "", link: "" });
+      await refreshNews();
+    }
+    setLoading(false);
   };
 
-  const saveEdit = (id: string) => {
-    if (!validateForm()) return;
-    setNews(news.map(n => n.id === id ? {
-      ...n, title: sanitizeInput(form.title), excerpt: sanitizeInput(form.excerpt), tag: sanitizeInput(form.tag),
-      imageUrl: form.imageUrl.trim() || undefined, link: form.link.trim() || undefined,
-    } : n));
-    setEditing(null);
-    toast.success("Berita diperbarui!");
+  const saveEdit = async (id: string) => {
+    if (!validateForm(editForm)) return;
+    setLoading(true);
+    const { error } = await supabase.from("berita").update({
+      judul: sanitizeInput(editForm.judul),
+      isi: sanitizeInput(editForm.isi),
+      tag: sanitizeInput(editForm.tag),
+      foto: editForm.foto.trim() || null,
+      link: editForm.link.trim() || null,
+    }).eq("id", id);
+    if (error) toast.error("Gagal update!");
+    else { toast.success("Berita diperbarui!"); setEditing(null); await refreshNews(); }
+    setLoading(false);
   };
 
-  const deleteNews = (id: string) => { setNews(news.filter(n => n.id !== id)); toast.success("Berita dihapus!"); };
-
-  const FormFields = ({ showSave, onSave }: { showSave?: boolean; onSave?: () => void }) => (
-    <div className="space-y-3">
-      <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} maxLength={200} placeholder="Judul berita *" className={inputClass} />
-      <textarea value={form.excerpt} onChange={e => setForm(f => ({ ...f, excerpt: e.target.value }))} maxLength={500} placeholder="Ringkasan *" rows={2} className={`${inputClass} resize-none`} />
-      <div className="space-y-2">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="relative">
-            <ImageIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
-            <input value={form.imageUrl.startsWith("data:") ? "📷 File terpilih" : form.imageUrl} onChange={e => setForm(f => ({ ...f, imageUrl: e.target.value }))} maxLength={500} placeholder="URL Gambar (opsional)" className={`${inputClass} pl-9 pr-20`} readOnly={form.imageUrl.startsWith("data:")} />
-            <label className="absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground px-2.5 py-1.5 rounded-md text-xs flex items-center gap-1 transition-colors">
-              <Upload size={12} /> File
-              <input type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleFileSelect(f, url => setForm(prev => ({ ...prev, imageUrl: url }))); e.target.value = ""; }} />
-            </label>
-          </div>
-          <div className="relative">
-            <LinkIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
-            <input value={form.link} onChange={e => setForm(f => ({ ...f, link: e.target.value }))} maxLength={500} placeholder="Link artikel (opsional)" className={`${inputClass} pl-9`} />
-          </div>
-        </div>
-        {form.imageUrl && (form.imageUrl.startsWith("data:") ? true : isValidSafeUrl(form.imageUrl)) && (
-          <div className="relative rounded-lg overflow-hidden border border-border/30 max-h-40">
-            <img src={form.imageUrl} alt="Preview" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-            {form.imageUrl.startsWith("data:") && <button type="button" onClick={() => setForm(f => ({ ...f, imageUrl: "" }))} className="absolute top-2 right-2 bg-background/80 rounded-full p-1 text-muted-foreground hover:text-destructive"><X size={14} /></button>}
-          </div>
-        )}
-      </div>
-      <div className="flex gap-3">
-        <input value={form.tag} onChange={e => setForm(f => ({ ...f, tag: e.target.value }))} maxLength={30} placeholder="Tag (misal: Prestasi) *" className={`flex-1 ${inputClass}`} />
-        {showSave ? (
-          <div className="flex gap-2">
-            <button onClick={onSave} className="text-foreground hover:text-foreground/80"><Save size={18} /></button>
-            <button onClick={() => setEditing(null)} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
-          </div>
-        ) : (
-          <button onClick={addNews} className="bg-foreground text-background px-6 py-2.5 rounded-lg text-sm font-semibold hover:bg-foreground/90 transition-colors">Tambah</button>
-        )}
-      </div>
-    </div>
-  );
+  const deleteNews = async (id: string) => {
+    const { error } = await supabase.from("berita").delete().eq("id", id);
+    if (error) toast.error("Gagal hapus!");
+    else { toast.success("Berita dihapus!"); await refreshNews(); }
+  };
 
   return (
     <div className="space-y-6">
       <div className="glass-card rounded-lg p-6">
         <h3 className="font-display font-semibold text-foreground mb-4 flex items-center gap-2"><Plus size={16} /> Tambah Berita</h3>
-        <FormFields />
+        <NewsForm form={addForm} setForm={setAddForm} onAdd={addNews} loading={loading} />
       </div>
 
       {news.map(item => (
         <div key={item.id} className="glass-card rounded-lg p-6">
           {editing === item.id ? (
-            <FormFields showSave onSave={() => saveEdit(item.id)} />
+            <NewsForm
+              form={editForm}
+              setForm={setEditForm}
+              onSave={() => saveEdit(item.id)}
+              onCancel={() => setEditing(null)}
+              loading={loading}
+            />
           ) : (
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <span className="text-xs font-mono text-muted-foreground/60 bg-secondary px-2 py-0.5 rounded-full">{item.tag}</span>
-                <h4 className="font-display font-semibold text-foreground mt-2">{item.title}</h4>
-                <p className="text-sm text-muted-foreground mt-1">{item.excerpt}</p>
-                {item.imageUrl && (
+                <h4 className="font-display font-semibold text-foreground mt-2">{item.judul}</h4>
+                <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{item.isi}</p>
+                {item.foto && (
                   <div className="mt-3 rounded-lg overflow-hidden border border-border/30 max-h-32">
-                    <img src={item.imageUrl} alt={item.title} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                    <img src={item.foto} alt={item.judul} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                   </div>
                 )}
-                <div className="flex items-center gap-3 mt-2">
-                  <p className="text-xs text-muted-foreground/40 font-mono">{item.date}</p>
-                  {item.link && (
-                    <a href={item.link} target="_blank" rel="noopener noreferrer" className="text-xs text-primary/60 hover:text-primary flex items-center gap-1">
-                      <LinkIcon size={10} /> Link
-                    </a>
-                  )}
-                </div>
+                <p className="text-xs text-muted-foreground/40 font-mono mt-2">{new Date(item.created_at).toLocaleDateString("id-ID")}</p>
               </div>
               <div className="flex gap-2 flex-shrink-0">
-                <button onClick={() => { setEditing(item.id); setForm({ title: item.title, excerpt: item.excerpt, tag: item.tag, imageUrl: item.imageUrl || "", link: item.link || "" }); }} className="text-muted-foreground hover:text-foreground transition-colors"><Edit2 size={16} /></button>
+                <button onClick={() => {
+                  setEditing(item.id);
+                  setEditForm({ judul: item.judul, isi: item.isi, tag: item.tag, foto: item.foto || "", link: item.link || "" });
+                }} className="text-muted-foreground hover:text-foreground transition-colors"><Edit2 size={16} /></button>
                 <button onClick={() => deleteNews(item.id)} className="text-muted-foreground hover:text-destructive transition-colors"><Trash2 size={16} /></button>
               </div>
             </div>
@@ -368,8 +377,35 @@ function NewsManager() {
   );
 }
 
+// ============================================================
+// Feedback Viewer
+// ============================================================
 function FeedbackViewer() {
-  const { feedbacks } = useDataStore();
+  const { feedbacks, loadingFeedbacks, refreshFeedbacks } = useDataStore();
+  const WA_NUMBER = import.meta.env.VITE_WA_NUMBER || "";
+
+  const markRead = async (id: string) => {
+    await supabase.from("kritik_saran").update({ is_read: true }).eq("id", id);
+    await refreshFeedbacks();
+  };
+
+  const deleteItem = async (id: string) => {
+    const { error } = await supabase.from("kritik_saran").delete().eq("id", id);
+    if (error) toast.error("Gagal hapus!");
+    else { toast.success("Feedback dihapus!"); await refreshFeedbacks(); }
+  };
+
+  const forwardToWA = (fb: FeedbackItem) => {
+    const numbers = (WA_NUMBER).split(",").map((n: string) => n.trim()).filter(Boolean);
+    if (!numbers.length) { toast.error("Nomor WA belum diset di .env!"); return; }
+    const text = encodeURIComponent(`🔔 *Kritik & Saran*\n\n*Dari:* ${fb.nama || "Anonim"}\n*Pesan:*\n${fb.pesan}`);
+    numbers.forEach(number => window.open(`https://wa.me/${number}?text=${text}`, "_blank"));
+  };
+
+  if (loadingFeedbacks) return (
+    <div className="glass-card rounded-lg p-12 text-center text-muted-foreground/40 font-mono text-sm">Memuat...</div>
+  );
+
   return (
     <div className="space-y-4">
       {feedbacks.length === 0 ? (
@@ -378,11 +414,27 @@ function FeedbackViewer() {
           <p className="text-muted-foreground text-sm">Belum ada kritik & saran.</p>
         </div>
       ) : feedbacks.map(fb => (
-        <div key={fb.id} className="glass-card rounded-lg p-6">
-          <p className="text-foreground text-sm">{fb.feedback}</p>
-          <div className="flex items-center gap-3 mt-3">
-            {fb.name && <span className="text-xs text-muted-foreground font-mono">— {fb.name}</span>}
-            <span className="text-xs text-muted-foreground/40 font-mono">{new Date(fb.createdAt).toLocaleDateString("id-ID")}</span>
+        <div key={fb.id} className={`glass-card rounded-lg p-6 ${!fb.is_read ? "border-l-2 border-l-foreground/30" : ""}`}>
+          <p className="text-foreground text-sm leading-relaxed">{fb.pesan}</p>
+          <div className="flex items-center justify-between mt-3 gap-3">
+            <div className="flex items-center gap-3">
+              {fb.nama && <span className="text-xs text-muted-foreground font-mono">— {fb.nama}</span>}
+              <span className="text-xs text-muted-foreground/40 font-mono">{new Date(fb.created_at).toLocaleDateString("id-ID")}</span>
+              {!fb.is_read && <span className="text-xs bg-foreground/10 text-foreground/60 px-2 py-0.5 rounded-full font-mono">Baru</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              {!fb.is_read && (
+                <button onClick={() => markRead(fb.id)} title="Tandai dibaca" className="text-muted-foreground hover:text-foreground transition-colors">
+                  <CheckCircle size={15} />
+                </button>
+              )}
+              <button onClick={() => forwardToWA(fb)} title="Kirim ke WA" className="text-muted-foreground hover:text-green-500 transition-colors">
+                <MessageCircle size={15} />
+              </button>
+              <button onClick={() => deleteItem(fb.id)} title="Hapus" className="text-muted-foreground hover:text-destructive transition-colors">
+                <Trash2 size={15} />
+              </button>
+            </div>
           </div>
         </div>
       ))}
@@ -390,34 +442,36 @@ function FeedbackViewer() {
   );
 }
 
-const gallerySchema = z.object({
-  title: z.string().trim().min(1).max(100),
-  description: z.string().max(300).optional(),
-  imageUrl: z.string().max(500).optional(),
-  link: z.string().max(500).optional(),
-});
-
+// ============================================================
+// Gallery Manager
+// ============================================================
 function GalleryManager() {
-  const { gallery, setGallery } = useDataStore();
-  const [form, setForm] = useState({ title: "", description: "", imageUrl: "", link: "" });
-  const aspects = ["aspect-square", "aspect-[4/5]", "aspect-video"];
-  const [aspect, setAspect] = useState(aspects[0]);
+  const { gallery, refreshGallery } = useDataStore();
+  const [form, setForm] = useState({ judul: "", deskripsi: "", foto: "", link: "" });
+  const [aspect, setAspect] = useState("aspect-square");
+  const [loading, setLoading] = useState(false);
 
-  const addItem = () => {
-    const result = gallerySchema.safeParse(form);
-    if (!result.success) { toast.error("Isi judul galeri!"); return; }
-    if (form.imageUrl && !isValidSafeUrl(form.imageUrl)) { toast.error("URL gambar tidak valid atau tidak aman!"); return; }
-    if (form.link && !isValidSafeUrl(form.link)) { toast.error("URL link tidak valid atau tidak aman!"); return; }
-    const item: GalleryItem = {
-      id: crypto.randomUUID(), title: sanitizeInput(form.title), description: sanitizeInput(form.description) || undefined,
-      aspect, imageUrl: form.imageUrl.trim() || undefined, link: form.link.trim() || undefined,
-    };
-    setGallery([...gallery, item]);
-    setForm({ title: "", description: "", imageUrl: "", link: "" });
-    toast.success("Item galeri ditambahkan!");
+  const addItem = async () => {
+    if (!form.judul.trim()) { toast.error("Judul wajib diisi!"); return; }
+    if (form.foto && !isValidSafeUrl(form.foto)) { toast.error("URL gambar tidak valid!"); return; }
+    setLoading(true);
+    const { error } = await supabase.from("galeri").insert({
+      judul: sanitizeInput(form.judul),
+      deskripsi: sanitizeInput(form.deskripsi) || null,
+      foto: form.foto.trim() || null,
+      link: form.link.trim() || null,
+      aspect,
+    });
+    if (error) toast.error("Gagal menyimpan!");
+    else { toast.success("Item galeri ditambahkan!"); setForm({ judul: "", deskripsi: "", foto: "", link: "" }); await refreshGallery(); }
+    setLoading(false);
   };
 
-  const deleteItem = (id: string) => { setGallery(gallery.filter(g => g.id !== id)); toast.success("Item galeri dihapus!"); };
+  const deleteItem = async (id: string) => {
+    const { error } = await supabase.from("galeri").delete().eq("id", id);
+    if (error) toast.error("Gagal hapus!");
+    else { toast.success("Item dihapus!"); await refreshGallery(); }
+  };
 
   return (
     <div className="space-y-6">
@@ -425,35 +479,34 @@ function GalleryManager() {
         <h3 className="font-display font-semibold text-foreground mb-4 flex items-center gap-2"><Plus size={16} /> Tambah Item Galeri</h3>
         <div className="space-y-3">
           <div className="flex gap-3">
-            <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} maxLength={100} placeholder="Judul foto *" className={`flex-1 ${inputClass}`} />
+            <input value={form.judul} onChange={e => setForm(f => ({ ...f, judul: e.target.value }))} maxLength={100} placeholder="Judul foto *" className={`flex-1 ${inputClass}`} />
             <select value={aspect} onChange={e => setAspect(e.target.value)} className="bg-secondary/50 border border-border/50 rounded-lg px-3 py-2.5 text-sm text-foreground focus:outline-none">
               <option value="aspect-square">Square</option>
               <option value="aspect-[4/5]">Portrait</option>
               <option value="aspect-video">Landscape</option>
             </select>
           </div>
-          <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} maxLength={300} placeholder="Deskripsi kegiatan (opsional)" className={inputClass} />
+          <input value={form.deskripsi} onChange={e => setForm(f => ({ ...f, deskripsi: e.target.value }))} maxLength={300} placeholder="Deskripsi (opsional)" className={inputClass} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="relative">
               <ImageIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
-              <input value={form.imageUrl.startsWith("data:") ? "📷 File terpilih" : form.imageUrl} onChange={e => setForm(f => ({ ...f, imageUrl: e.target.value }))} maxLength={500} placeholder="URL Gambar / Link GDrive" className={`${inputClass} pl-9 pr-20`} readOnly={form.imageUrl.startsWith("data:")} />
+              <input value={form.foto.startsWith("data:") ? "📷 File terpilih" : form.foto} onChange={e => setForm(f => ({ ...f, foto: e.target.value }))} placeholder="URL Gambar" className={`${inputClass} pl-9 pr-20`} readOnly={form.foto.startsWith("data:")} />
               <label className="absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground px-2.5 py-1.5 rounded-md text-xs flex items-center gap-1 transition-colors">
                 <Upload size={12} /> File
-                <input type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleFileSelect(f, url => setForm(prev => ({ ...prev, imageUrl: url }))); e.target.value = ""; }} />
+                <input type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleFileSelect(f, url => setForm(prev => ({ ...prev, foto: url }))); e.target.value = ""; }} />
               </label>
             </div>
             <div className="relative">
               <LinkIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
-              <input value={form.link} onChange={e => setForm(f => ({ ...f, link: e.target.value }))} maxLength={500} placeholder="Link terkait (opsional)" className={`${inputClass} pl-9`} />
+              <input value={form.link} onChange={e => setForm(f => ({ ...f, link: e.target.value }))} placeholder="Link (opsional)" className={`${inputClass} pl-9`} />
             </div>
           </div>
-          {form.imageUrl && (form.imageUrl.startsWith("data:") ? true : isValidSafeUrl(form.imageUrl)) && (
-            <div className="relative rounded-lg overflow-hidden border border-border/30 max-h-32">
-              <img src={form.imageUrl} alt="Preview" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-              {form.imageUrl.startsWith("data:") && <button type="button" onClick={() => setForm(f => ({ ...f, imageUrl: "" }))} className="absolute top-2 right-2 bg-background/80 rounded-full p-1 text-muted-foreground hover:text-destructive"><X size={14} /></button>}
+          {form.foto && (
+            <div className="rounded-lg overflow-hidden border border-border/30 max-h-32">
+              <img src={form.foto} alt="Preview" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
             </div>
           )}
-          <button onClick={addItem} className="bg-foreground text-background px-6 py-2.5 rounded-lg text-sm font-semibold hover:bg-foreground/90 transition-colors">Tambah</button>
+          <button onClick={addItem} disabled={loading} className="bg-foreground text-background px-6 py-2.5 rounded-lg text-sm font-semibold hover:bg-foreground/90 transition-colors disabled:opacity-50">Tambah</button>
         </div>
       </div>
 
@@ -461,21 +514,16 @@ function GalleryManager() {
         {gallery.map(item => (
           <div key={item.id} className="glass-card rounded-lg p-4 group">
             <div className={`${item.aspect} bg-secondary rounded-lg mb-3 flex items-center justify-center overflow-hidden relative`}>
-              {item.imageUrl ? (
-                <img src={item.imageUrl} alt={item.title} className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+              {item.foto ? (
+                <img src={item.foto} alt={item.judul} className="absolute inset-0 w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
               ) : (
-                <span className="text-muted-foreground/30 font-mono text-xs">{item.title}</span>
+                <span className="text-muted-foreground/30 font-mono text-xs">{item.judul}</span>
               )}
             </div>
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <span className="text-sm font-display text-foreground block truncate">{item.title}</span>
-                {item.description && <p className="text-xs text-muted-foreground/60 mt-0.5 line-clamp-2">{item.description}</p>}
-                {item.link && (
-                  <a href={item.link} target="_blank" rel="noopener noreferrer" className="text-xs text-primary/60 hover:text-primary flex items-center gap-1 mt-1">
-                    <LinkIcon size={10} /> Link
-                  </a>
-                )}
+                <span className="text-sm font-display text-foreground block truncate">{item.judul}</span>
+                {item.deskripsi && <p className="text-xs text-muted-foreground/60 mt-0.5 line-clamp-2">{item.deskripsi}</p>}
               </div>
               <button onClick={() => deleteItem(item.id)} className="text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"><Trash2 size={14} /></button>
             </div>

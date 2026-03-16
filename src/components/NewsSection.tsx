@@ -3,7 +3,7 @@ import { ArrowUpRight, Clock, ExternalLink } from "lucide-react";
 import { useDataStore } from "@/lib/dataStore";
 
 const NewsSection = () => {
-  const { news } = useDataStore();
+  const { news, loadingNews } = useDataStore();
 
   return (
     <section id="berita" className="py-32 relative">
@@ -20,64 +20,81 @@ const NewsSection = () => {
           <div className="glow-line w-24 mx-auto mt-6" />
         </motion.div>
 
-        <div className="space-y-6 max-w-3xl mx-auto">
-          {news.map((item, i) => {
-            const Wrapper = item.link ? "a" : "div";
-            const wrapperProps = item.link ? { href: item.link, target: "_blank", rel: "noopener noreferrer" } : {};
-            return (
-              <motion.article
-                key={item.id}
-                initial={{ opacity: 0, x: -30 }}
-                whileInView={{ opacity: 1, x: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: i * 0.15, duration: 0.6 }}
-              >
-                <Wrapper
-                  {...wrapperProps}
-                  className="glass-card rounded-lg overflow-hidden group hover:bg-accent/40 transition-all duration-500 cursor-pointer block"
+        {loadingNews ? (
+          <div className="space-y-6 max-w-3xl mx-auto">
+            {[1, 2, 3].map(i => (
+              <div key={i} className="glass-card rounded-lg p-8 animate-pulse">
+                <div className="h-4 bg-secondary rounded w-1/4 mb-4" />
+                <div className="h-6 bg-secondary rounded w-3/4 mb-2" />
+                <div className="h-4 bg-secondary rounded w-full" />
+              </div>
+            ))}
+          </div>
+        ) : news.length === 0 ? (
+          <div className="text-center text-muted-foreground/40 font-mono text-sm py-20">
+            Belum ada berita.
+          </div>
+        ) : (
+          <div className="space-y-6 max-w-3xl mx-auto">
+            {news.map((item, i) => {
+              const Wrapper = item.link ? "a" : "div";
+              const wrapperProps = item.link
+                ? { href: item.link, target: "_blank", rel: "noopener noreferrer" }
+                : {};
+              return (
+                <motion.article
+                  key={item.id}
+                  initial={{ opacity: 0, x: -30 }}
+                  whileInView={{ opacity: 1, x: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ delay: i * 0.15, duration: 0.6 }}
                 >
-                  {item.imageUrl && (
-                    <div className="w-full h-48 overflow-hidden">
-                      <img
-                        src={item.imageUrl}
-                        alt={item.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                      />
-                    </div>
-                  )}
-                  <div className="p-8">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1">
-                        <span className="text-xs font-mono text-muted-foreground/60 uppercase tracking-wider bg-secondary px-3 py-1 rounded-full">
-                          {item.tag}
-                        </span>
-                        <h3 className="text-xl font-display font-semibold text-foreground mt-3 mb-2 group-hover:text-gradient transition-all">
-                          {item.title}
-                        </h3>
-                        <p className="text-muted-foreground text-sm leading-relaxed">{item.excerpt}</p>
-                        <div className="flex items-center gap-3 mt-4 text-xs text-muted-foreground/50">
-                          <Clock size={12} />
-                          <span>{item.date}</span>
-                          {item.link && (
-                            <span className="flex items-center gap-1 text-primary/50">
-                              <ExternalLink size={10} /> Baca selengkapnya
-                            </span>
-                          )}
-                        </div>
+                  <Wrapper
+                    {...wrapperProps}
+                    className="glass-card rounded-lg overflow-hidden group hover:bg-accent/40 transition-all duration-500 cursor-pointer block"
+                  >
+                    {item.foto && (
+                      <div className="w-full h-48 overflow-hidden">
+                        <img
+                          src={item.foto}
+                          alt={item.judul}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                        />
                       </div>
-                      <ArrowUpRight className="text-muted-foreground/30 group-hover:text-foreground/60 transition-colors flex-shrink-0 mt-2" size={20} />
+                    )}
+                    <div className="p-8">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1">
+                          <span className="text-xs font-mono text-muted-foreground/60 uppercase tracking-wider bg-secondary px-3 py-1 rounded-full">
+                            {item.tag}
+                          </span>
+                          <h3 className="text-xl font-display font-semibold text-foreground mt-3 mb-2 group-hover:text-gradient transition-all">
+                            {item.judul}
+                          </h3>
+                          <p className="text-muted-foreground text-sm leading-relaxed">{item.isi}</p>
+                          <div className="flex items-center gap-3 mt-4 text-xs text-muted-foreground/50">
+                            <Clock size={12} />
+                            <span>{new Date(item.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</span>
+                            {item.link && (
+                              <span className="flex items-center gap-1 text-primary/50">
+                                <ExternalLink size={10} /> Baca selengkapnya
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <ArrowUpRight className="text-muted-foreground/30 group-hover:text-foreground/60 transition-colors flex-shrink-0 mt-2" size={20} />
+                      </div>
                     </div>
-                  </div>
-                </Wrapper>
-              </motion.article>
-            );
-          })}
-        </div>
+                  </Wrapper>
+                </motion.article>
+              );
+            })}
+          </div>
+        )}
       </div>
     </section>
   );
 };
 
 export default NewsSection;
-

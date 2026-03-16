@@ -19,8 +19,8 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Index />} />
-            <Route path="/admin/asa9panel" element={<AdminPanel />} />
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+            <Route path="/ASA9ADMIN" element={<AdminPanel />} />
+            <Route path="/admin/asa9panel" element={<NotFound />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
@@ -30,5 +30,3 @@ const App = () => (
 );
 
 export default App;
-
-

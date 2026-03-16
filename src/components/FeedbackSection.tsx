@@ -1,28 +1,41 @@
 import { motion } from "framer-motion";
 import { MessageSquare, Send, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
+import ReCAPTCHA from "react-google-recaptcha";
 import { useDataStore } from "@/lib/dataStore";
 import { sanitizeInput, checkRateLimit } from "@/lib/security";
 
 const feedbackSchema = z.object({
-  name: z.string().trim().max(50, "Nama maksimal 50 karakter").optional(),
-  feedback: z.string().trim().min(1, "Kritik/saran tidak boleh kosong").max(1000, "Maksimal 1000 karakter"),
+  nama: z.string().trim().max(50, "Nama maksimal 50 karakter").optional(),
+  pesan: z.string().trim().min(1, "Kritik/saran tidak boleh kosong").max(1000, "Maksimal 1000 karakter"),
 });
 
 const FeedbackSection = () => {
   const { addFeedback } = useDataStore();
-  const [name, setName] = useState("");
-  const [feedback, setFeedback] = useState("");
+  const [nama, setNama] = useState("");
+  const [pesan, setPesan] = useState("");
+  const [honeypot, setHoneypot] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const captchaRef = useRef<ReCAPTCHA>(null);
+  const mountTime = useRef(Date.now());
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
 
-    const result = feedbackSchema.safeParse({ name: name || undefined, feedback });
+    if (honeypot) return;
+    if (Date.now() - mountTime.current < 3000) { toast.error("Terlalu cepat! Coba lagi."); return; }
+
+    const limit = checkRateLimit("feedback", 5, 60_000, 180_000);
+    if (!limit.allowed) { toast.error("Terlalu banyak pengiriman! Coba lagi nanti."); return; }
+
+    if (!captchaToken) { toast.error("Selesaikan CAPTCHA terlebih dahulu!"); return; }
+
+    const result = feedbackSchema.safeParse({ nama: nama || undefined, pesan });
     if (!result.success) {
       const fieldErrors: Record<string, string> = {};
       result.error.errors.forEach((err) => {
@@ -32,20 +45,22 @@ const FeedbackSection = () => {
       return;
     }
 
-    const limit = checkRateLimit("feedback", 5, 60_000, 180_000);
-    if (!limit.allowed) {
-      toast.error("Terlalu banyak pengiriman! Coba lagi nanti.");
-      return;
-    }
-
     setSending(true);
-    setTimeout(() => {
-      addFeedback({ name: name.trim() ? sanitizeInput(name) : undefined, feedback: sanitizeInput(feedback) });
+    const cleanNama = nama.trim() ? sanitizeInput(nama) : "Anonim";
+    const cleanPesan = sanitizeInput(pesan);
+
+    const { error } = await addFeedback(cleanNama, cleanPesan);
+
+    if (error) {
+      toast.error("Gagal mengirim. Coba lagi.");
+    } else {
       toast.success("Terima kasih atas masukan Anda! 🙏");
-      setName("");
-      setFeedback("");
-      setSending(false);
-    }, 800);
+      setNama("");
+      setPesan("");
+      setCaptchaToken(null);
+      captchaRef.current?.reset();
+    }
+    setSending(false);
   };
 
   return (
@@ -71,6 +86,9 @@ const FeedbackSection = () => {
           transition={{ delay: 0.2, duration: 0.8 }}
           className="glass-card rounded-lg p-8 md:p-12 max-w-xl mx-auto"
         >
+          {/* 🍯 Honeypot */}
+          <input type="text" name="website" value={honeypot} onChange={(e) => setHoneypot(e.target.value)} style={{ display: "none" }} tabIndex={-1} autoComplete="off" />
+
           <div className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-3">
               <MessageSquare className="text-muted-foreground" size={20} />
@@ -81,15 +99,47 @@ const FeedbackSection = () => {
 
           <div className="space-y-5">
             <div>
-              <input type="text" placeholder="Nama (opsional)" value={name} maxLength={50} onChange={(e) => setName(e.target.value)} className="w-full bg-secondary/50 border border-border/50 rounded-lg px-5 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring/50 transition-all" />
-              {errors.name && <p className="text-xs text-destructive mt-1.5 font-mono">{errors.name}</p>}
+              <input
+                type="text"
+                placeholder="Nama (opsional)"
+                value={nama}
+                maxLength={50}
+                onChange={(e) => setNama(e.target.value)}
+                className="w-full bg-secondary/50 border border-border/50 rounded-lg px-5 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring/50 transition-all"
+              />
+              {errors.nama && <p className="text-xs text-destructive mt-1.5 font-mono">{errors.nama}</p>}
             </div>
             <div>
-              <textarea placeholder="Tulis kritik atau saran kamu di sini..." value={feedback} maxLength={1000} onChange={(e) => setFeedback(e.target.value)} rows={5} className="w-full bg-secondary/50 border border-border/50 rounded-lg px-5 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring/50 transition-all resize-none" />
-              <p className="text-xs text-muted-foreground/30 text-right mt-1 font-mono">{feedback.length}/1000</p>
-              {errors.feedback && <p className="text-xs text-destructive mt-1 font-mono">{errors.feedback}</p>}
+              <textarea
+                placeholder="Tulis kritik atau saran kamu di sini..."
+                value={pesan}
+                maxLength={1000}
+                onChange={(e) => setPesan(e.target.value)}
+                rows={5}
+                className="w-full bg-secondary/50 border border-border/50 rounded-lg px-5 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring/50 transition-all resize-none"
+              />
+              <p className="text-xs text-muted-foreground/30 text-right mt-1 font-mono">{pesan.length}/1000</p>
+              {errors.pesan && <p className="text-xs text-destructive mt-1 font-mono">{errors.pesan}</p>}
             </div>
-            <motion.button type="submit" disabled={sending} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} className="w-full bg-foreground text-background font-display font-semibold py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-foreground/90 transition-colors disabled:opacity-50">
+
+            {/* reCAPTCHA v2 */}
+            <div className="flex justify-center">
+              <ReCAPTCHA
+                ref={captchaRef}
+                sitekey={import.meta.env.VITE_RECAPTCHA_SITE_KEY}
+                onChange={(token) => setCaptchaToken(token)}
+                onExpired={() => setCaptchaToken(null)}
+                theme="dark"
+              />
+            </div>
+
+            <motion.button
+              type="submit"
+              disabled={sending || !captchaToken}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              className="w-full bg-foreground text-background font-display font-semibold py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-foreground/90 transition-colors disabled:opacity-50"
+            >
               {sending ? (
                 <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }} className="w-4 h-4 border-2 border-background border-t-transparent rounded-full" />
               ) : (
@@ -104,4 +154,3 @@ const FeedbackSection = () => {
 };
 
 export default FeedbackSection;
-
