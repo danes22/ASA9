@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import ReCAPTCHA from "react-google-recaptcha";
 import { useDataStore } from "@/lib/dataStore";
-import { sanitizeInput, checkRateLimit } from "@/lib/security";
+import { sanitizeInput, checkRateLimit, stripHtml } from "@/lib/security";
 
 const feedbackSchema = z.object({
   nama: z.string().trim().max(50, "Nama maksimal 50 karakter").optional(),
@@ -46,8 +46,8 @@ const FeedbackSection = () => {
     }
 
     setSending(true);
-    const cleanNama = nama.trim() ? sanitizeInput(nama) : "Anonim";
-    const cleanPesan = sanitizeInput(pesan);
+    const cleanNama = stripHtml(nama.trim() ? sanitizeInput(nama) : "Anonim");
+    const cleanPesan = stripHtml(sanitizeInput(pesan));
 
     const { error } = await addFeedback(cleanNama, cleanPesan);
 

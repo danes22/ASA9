@@ -131,3 +131,18 @@ export function notifyWhatsApp(nama: string, pesan: string) {
   const text = encodeURIComponent(`🔔 *Kritik & Saran Baru*\n\n*Dari:* ${nama || "Anonim"}\n*Pesan:*\n${pesan}`);
   window.open(`https://wa.me/${WA_NUMBER}?text=${text}`, "_blank");
 }
+
+//===================================================
+// 7. STRIP HTML XSS ================================
+//===================================================
+export function stripHtml(str: string): string {
+  if (!str || typeof str !== "string") return "";
+  return str
+  .replace(/<[^>]*>/g, "") 
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .trim();
+}
