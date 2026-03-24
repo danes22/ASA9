@@ -49,7 +49,7 @@ const FeedbackSection = () => {
     const cleanNama = stripHtml(nama.trim() ? sanitizeInput(nama) : "Anonim");
     const cleanPesan = stripHtml(sanitizeInput(pesan));
 
-    const { error } = await addFeedback(cleanNama, cleanPesan);
+    const { error } = await addFeedback(cleanNama, cleanPesan, honeypot);
 
     if (error) {
       toast.error("Gagal mengirim. Coba lagi.");

@@ -45,7 +45,7 @@ interface DataStore {
   refreshNews: () => Promise<void>;
   refreshGallery: () => Promise<void>;
   refreshFeedbacks: () => Promise<void>;
-  addFeedback: (nama: string, pesan: string) => Promise<{ error: string | null }>;
+  addFeedback: (nama: string, pesan: string, honeypot?: string) => Promise<{ error: string | null }>;
 }
 
 const DataContext = createContext<DataStore | null>(null);
@@ -97,12 +97,25 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     setLoadingFeedbacks(false);
   }, []);
 
-  const addFeedback = useCallback(async (nama: string, pesan: string) => {
-    const { error } = await supabase.from("kritik_saran").insert({
-      nama: nama.trim() || "Anonim",
-      pesan: pesan.trim(),
-    });
-    return { error: error?.message || null };
+  // ============================================================
+  // addFeedback — lewat Edge Function (tidak bisa di-bypass)
+  // ============================================================
+  const addFeedback = useCallback(async (nama: string, pesan: string, honeypot = "") => {
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/submit-kritik`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nama, pesan, honeypot }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) return { error: data.error || "Gagal mengirim." };
+      return { error: null };
+    } catch {
+      return { error: "Gagal mengirim. Coba lagi." };
+    }
   }, []);
 
   useEffect(() => {

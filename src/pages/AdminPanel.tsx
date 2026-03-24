@@ -24,9 +24,7 @@ const handleFileSelect = (file: File, onResult: (dataUrl: string) => void) => {
   reader.readAsDataURL(file);
 };
 
-// ============================================================
-// NEWS FORM — standalone component, outside NewsManager
-// ============================================================
+
 interface NewsFormProps {
   form: { judul: string; isi: string; tag: string; foto: string; link: string };
   setForm: React.Dispatch<React.SetStateAction<{ judul: string; isi: string; tag: string; foto: string; link: string }>>;
@@ -113,9 +111,7 @@ function NewsForm({ form, setForm, onSave, onCancel, onAdd, loading }: NewsFormP
   );
 }
 
-// ============================================================
-// Admin Panel
-// ============================================================
+
 const AdminPanel = () => {
   const [authenticated, setAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
@@ -268,9 +264,7 @@ const AdminPanel = () => {
   );
 };
 
-// ============================================================
-// News Manager
-// ============================================================
+
 const newsSchema = z.object({
   judul: z.string().trim().min(1, "Judul wajib diisi").max(200),
   isi: z.string().trim().min(1, "Isi wajib diisi").max(2000),
@@ -377,9 +371,6 @@ function NewsManager() {
   );
 }
 
-// ============================================================
-// Feedback Viewer
-// ============================================================
 function FeedbackViewer() {
   const { feedbacks, loadingFeedbacks, refreshFeedbacks } = useDataStore();
   const WA_NUMBER = import.meta.env.VITE_WA_NUMBER || "";
@@ -442,9 +433,7 @@ function FeedbackViewer() {
   );
 }
 
-// ============================================================
-// Gallery Manager
-// ============================================================
+
 function GalleryManager() {
   const { gallery, refreshGallery } = useDataStore();
   const [form, setForm] = useState({ judul: "", deskripsi: "", foto: "", link: "" });
